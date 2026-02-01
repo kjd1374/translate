@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+  translate-app:
+    container_name: couple-translator
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    # If using Synology or other NAS, you might want to mount .env manually or pass env var in UI
