@@ -19,34 +19,45 @@ export default function RoomPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [myLanguage, setMyLanguage] = useState<Language>('ko');
+    const [logs, setLogs] = useState<string[]>([]); // Debug Logs
+
+    const addLog = (msg: string) => {
+        setLogs(prev => [msg, ...prev].slice(0, 10)); // Keep last 10 logs
+    };
 
     // Hooks
-    const { isRecording, startRecording, stopRecording, permissionError } = useAudioRecorder();
+    const { isRecording, startRecording, stopRecording, permissionError } = useAudioRecorder(addLog);
 
     // Audio Ref
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     const toggleRecording = async () => {
         if (isRecording) {
+            addLog("User clicked STOP");
             await handleStopRecording();
         } else {
+            addLog("User clicked START");
             await startRecording();
         }
     };
 
     const handleStopRecording = async () => {
         setIsProcessing(true);
+        addLog("Processing stop...");
         const audioBlob = await stopRecording();
 
         if (audioBlob) {
+            addLog(`Audio captured. Size: ${audioBlob.size}`);
             await processAudio(audioBlob);
         } else {
+            addLog("No audio blob returned.");
             setIsProcessing(false);
         }
     };
 
     const processAudio = async (audioBlob: Blob) => {
         try {
+            addLog("Sending to API...");
             const formData = new FormData();
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('sourceLang', myLanguage);
@@ -63,6 +74,8 @@ export default function RoomPage() {
                 throw new Error(data.error || 'Translation failed');
             }
 
+            addLog("Translation received");
+
             const newMessage: Message = {
                 id: Date.now().toString(),
                 role: 'user', // In this MVP, I am always the user
@@ -78,15 +91,17 @@ export default function RoomPage() {
             // Auto play audio (Browser TTS)
             speakText(data.translatedText, myLanguage === 'ko' ? 'vi' : 'ko');
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Processing error:", error);
-            alert("Failed to process audio. Check console.");
+            addLog("API Error: " + error.message);
+            alert("Failed to process audio. Check logs.");
         } finally {
             setIsProcessing(false);
         }
     };
 
     const speakText = (text: string, lang: Language) => {
+        addLog(`TTS speaking (${lang}): ${text}`);
         if (typeof window !== 'undefined' && window.speechSynthesis) {
             // Cancel current speech
             window.speechSynthesis.cancel();
@@ -95,6 +110,8 @@ export default function RoomPage() {
             // 'vi-VN' for Vietnamese, 'ko-KR' for Korean
             utterance.lang = lang === 'vi' ? 'vi-VN' : 'ko-KR';
             window.speechSynthesis.speak(utterance);
+        } else {
+            addLog("Browser does not support speech synthesis");
         }
     };
 
@@ -134,6 +151,14 @@ export default function RoomPage() {
                         {permissionError}
                     </div>
                 )}
+
+                {/* Debug Console */}
+                <div className="bg-black/80 text-green-400 text-xs p-2 rounded font-mono h-24 overflow-y-auto mb-2 pointer-events-none opacity-80 z-50">
+                    {logs.map((log, i) => (
+                        <div key={i}>{log}</div>
+                    ))}
+                    {logs.length === 0 && <div>Debug logs will appear here...</div>}
+                </div>
 
                 {/* Language Handover */}
                 <Card className="p-1 flex rounded-full bg-slate-200 border-none shrink-0">
