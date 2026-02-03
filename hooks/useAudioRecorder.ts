@@ -1,120 +1,187 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 interface UseAudioRecorderReturn {
     isRecording: boolean;
     startRecording: () => Promise<void>;
     stopRecording: () => Promise<Blob | null>;
     permissionError: string | null;
+    volume: number; // 0 to 100
 }
 
-export function useAudioRecorder(log: (msg: string) => void): UseAudioRecorderReturn {
+export function useAudioRecorder(log?: (msg: string) => void): UseAudioRecorderReturn {
     const [isRecording, setIsRecording] = useState(false);
     const [permissionError, setPermissionError] = useState<string | null>(null);
+    const [volume, setVolume] = useState(0);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
 
+    // Audio Analysis Refs
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+    const animationFrameRef = useRef<number | null>(null);
+
+    const safeLog = useCallback((msg: string) => {
+        if (log) log(msg);
+        else console.log(msg);
+    }, [log]);
+
+    const cleanupAudioAnalysis = () => {
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+        }
+        if (sourceRef.current) {
+            sourceRef.current.disconnect();
+            sourceRef.current = null;
+        }
+        if (analyserRef.current) {
+            analyserRef.current.disconnect();
+            analyserRef.current = null;
+        }
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+            audioContextRef.current.close().catch(e => console.error("Ctx close error", e));
+            audioContextRef.current = null;
+        }
+        setVolume(0);
+    };
+
+    const startAnalysis = (stream: MediaStream) => {
+        try {
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            const audioContext = new AudioContextClass();
+            audioContextRef.current = audioContext;
+
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            analyserRef.current = analyser;
+
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+            sourceRef.current = source;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            const updateVolume = () => {
+                analyser.getByteFrequencyData(dataArray);
+
+                // Calculate average volume
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / dataArray.length;
+
+                // Scale to 0-100 roughly (255 is max but speech usually lower)
+                const vol = Math.min(100, Math.round((average / 128) * 100));
+                setVolume(vol);
+
+                if (audioContextRef.current?.state === 'running') {
+                    animationFrameRef.current = requestAnimationFrame(updateVolume);
+                }
+            };
+            updateVolume();
+        } catch (e: any) {
+            safeLog("Audio Analysis Error: " + e.message);
+        }
+    };
+
     const startRecording = useCallback(async () => {
         try {
-            log("Requesting microphone permission...");
-            // 1. Get the stream
+            safeLog("Requesting microphone permission...");
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            log("Microphone access granted. Stream ID: " + stream.id);
+            safeLog("Microphone access granted. Stream ID: " + stream.id);
 
-            // 2. Create MediaRecorder without forcing mimeType.
-            // iOS Safari works best when allowed to choose its default (typically audio/mp4).
+            // Start Visualizer
+            startAnalysis(stream);
+
+            // Native MediaRecorder
             const mediaRecorder = new MediaRecorder(stream);
-            log(`MediaRecorder created. MimeType: ${mediaRecorder.mimeType} State: ${mediaRecorder.state}`);
+            safeLog(`MediaRecorder created. MimeType: ${mediaRecorder.mimeType}`);
 
             mediaRecorderRef.current = mediaRecorder;
-            chunksRef.current = []; // Reset chunks
+            chunksRef.current = [];
 
-            // 3. Handle data availability
             mediaRecorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) {
                     chunksRef.current.push(event.data);
-                    // log(`Data chunk received: ${event.data.size} bytes`); // Too noisy
+                    // Log occasionally to prove life without spamming too much
+                    if (chunksRef.current.length % 5 === 1) {
+                        safeLog(`Recording... Chunks: ${chunksRef.current.length}, Last: ${event.data.size}b`);
+                    }
                 }
             };
 
             mediaRecorder.onerror = (event: any) => {
-                log("MediaRecorder Error: " + JSON.stringify(event.error));
+                safeLog("MediaRecorder Error: " + JSON.stringify(event.error));
             };
 
             mediaRecorder.onstart = () => {
-                log("MediaRecorder started event fired.");
+                safeLog("MediaRecorder started.");
             };
 
-            // 4. Start recording with a timeslice.
-            // CRITICAL FOR IOS: Passing a timeslice (e.g. 1000ms) forces dataavailable events 
-            // to fire periodically, preventing the recorder from hanging or returning empty data on stop.
+            // 1s timeslice is critical for iOS
             mediaRecorder.start(1000);
-            log("mediaRecorder.start(1000) called");
+            safeLog("mediaRecorder.start(1000) called");
 
             setIsRecording(true);
             setPermissionError(null);
         } catch (err: any) {
-            log("Error accessing microphone: " + err.message);
-            console.error("Error accessing microphone:", err);
+            safeLog("Error accessing microphone: " + err.message);
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                 setPermissionError("Microphone permission denied.");
             } else {
                 setPermissionError("Could not access microphone: " + err.message);
             }
         }
-    }, [log]);
+    }, [safeLog]);
 
     const stopRecording = useCallback(async (): Promise<Blob | null> => {
-        log("stopRecording triggered");
+        safeLog("stopRecording triggered");
         const recorder = mediaRecorderRef.current;
+
+        // Stop visualization loop
+        cleanupAudioAnalysis();
+
         if (!recorder) {
-            log("No recorder instance found");
+            safeLog("No recorder instance found");
             return null;
         }
 
         return new Promise((resolve) => {
-            // Define cleanup function to run on stop or timeout
             const cleanup = () => {
-                log("Cleanup started");
+                safeLog("Cleanup started");
                 if (recorder.state !== 'inactive') {
-                    try {
-                        recorder.stop();
-                    } catch (e) {
-                        log("Stop error (ignore): " + e);
-                    }
+                    try { recorder.stop(); } catch (e) { /* ignore */ }
                 }
 
                 if (recorder.stream) {
-                    recorder.stream.getTracks().forEach(track => {
-                        track.stop();
-                        log("Track stopped: " + track.kind);
-                    });
+                    recorder.stream.getTracks().forEach(track => track.stop());
                 }
 
                 setIsRecording(false);
 
                 const blobSize = chunksRef.current.reduce((acc, chunk) => acc + chunk.size, 0);
-                log(`Total recorded size: ${blobSize} bytes`);
+                safeLog(`Total size: ${blobSize} bytes`);
 
                 if (chunksRef.current.length === 0) {
-                    log("Warning: No audio chunks recorded");
+                    safeLog("Warning: No audio chunks.");
                     resolve(null);
                 } else {
-                    const type = recorder.mimeType || 'audio/mp4'; // iOS Fallback
-                    log(`Creating blob with type: ${type}`);
+                    const type = recorder.mimeType || 'audio/mp4';
+                    safeLog(`Blob type: ${type}`);
                     const audioBlob = new Blob(chunksRef.current, { type });
                     resolve(audioBlob);
                 }
             };
 
-            // iOS Safari Protection: If onstop doesn't fire within 1s, force cleanup
             const timeoutId = setTimeout(() => {
-                log("Forcing cleanup due to timeout");
+                safeLog("Forcing cleanup (timeout)");
                 cleanup();
             }, 1000);
 
             recorder.onstop = () => {
-                log("Recorder onstop event fired");
                 clearTimeout(timeoutId);
                 cleanup();
             };
@@ -124,10 +191,9 @@ export function useAudioRecorder(log: (msg: string) => void): UseAudioRecorderRe
                 cleanup();
             } else {
                 recorder.stop();
-                log("recorder.stop() called");
             }
         });
-    }, [log]);
+    }, [safeLog]);
 
-    return { isRecording, startRecording, stopRecording, permissionError };
+    return { isRecording, startRecording, stopRecording, permissionError, volume };
 }
