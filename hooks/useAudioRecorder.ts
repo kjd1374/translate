@@ -14,73 +14,79 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
 
-    // Check supported mime type
-    const getMimeType = () => {
-        const types = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/mp4',
-            '' // Default fallback
-        ];
-        if (typeof MediaRecorder === 'undefined') return '';
-        return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-    };
-
     const startRecording = useCallback(async () => {
         try {
+            // 1. Get the stream
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            const mimeType = getMimeType();
-            const options = mimeType ? { mimeType } : undefined;
-
-            const mediaRecorder = new MediaRecorder(stream, options);
+            // 2. Create MediaRecorder without forcing mimeType.
+            // iOS Safari works best when allowed to choose its default (typically audio/mp4).
+            const mediaRecorder = new MediaRecorder(stream);
 
             mediaRecorderRef.current = mediaRecorder;
             chunksRef.current = []; // Reset chunks
 
+            // 3. Handle data availability
             mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
+                if (event.data && event.data.size > 0) {
                     chunksRef.current.push(event.data);
+                    // console.log("Chunk received:", event.data.size);
                 }
             };
 
-            mediaRecorder.start();
+            mediaRecorder.onerror = (event) => {
+                console.error("MediaRecorder error:", event);
+            };
+
+            // 4. Start recording with a timeslice.
+            // CRITICAL FOR IOS: Passing a timeslice (e.g. 1000ms) forces dataavailable events 
+            // to fire periodically, preventing the recorder from hanging or returning empty data on stop.
+            mediaRecorder.start(1000);
+
             setIsRecording(true);
             setPermissionError(null);
         } catch (err: any) {
             console.error("Error accessing microphone:", err);
-            // Detailed error handling for iOS/Safari
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                 setPermissionError("Microphone permission denied. Please enable it in settings.");
             } else {
-                setPermissionError("Could not access microphone.");
+                setPermissionError("Could not access microphone. " + err.message);
             }
         }
     }, []);
 
     const stopRecording = useCallback(async (): Promise<Blob | null> => {
-        if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
-            return null;
-        }
+        const recorder = mediaRecorderRef.current;
+        if (!recorder) return null;
 
         return new Promise((resolve) => {
-            const mediaRecorder = mediaRecorderRef.current!;
-
-            mediaRecorder.onstop = () => {
-                let mimeType = mediaRecorder.mimeType || 'audio/webm';
-                if (!mimeType || mimeType === '') mimeType = 'audio/mp4';
-
-                // Mobile Safari workaround: sometimes gives empty mimeType but works with mp4 container logic or plain blob
-                // We'll trust the captured chunks.
-                const audioBlob = new Blob(chunksRef.current, { type: mimeType });
-
-                // Stop all tracks to release microphone
-                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            const cleanup = () => {
+                // Stop all media tracks to release the microphone
+                if (recorder.stream) {
+                    recorder.stream.getTracks().forEach(track => track.stop());
+                }
                 setIsRecording(false);
+
+                // Create the final blob
+                if (chunksRef.current.length === 0) {
+                    console.warn("No audio chunks recorded");
+                    resolve(null);
+                    return;
+                }
+
+                // Detect type or fallback to mp4 (safest for iOS)
+                const type = recorder.mimeType || 'audio/mp4';
+                const audioBlob = new Blob(chunksRef.current, { type });
                 resolve(audioBlob);
             };
 
-            mediaRecorder.stop();
+            if (recorder.state === 'inactive') {
+                cleanup();
+            } else {
+                // Force stop and wait for onstop event
+                recorder.onstop = cleanup;
+                recorder.stop();
+            }
         });
     }, []);
 
