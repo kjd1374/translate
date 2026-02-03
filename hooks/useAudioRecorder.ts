@@ -14,13 +14,26 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
 
+    // Check supported mime type
+    const getMimeType = () => {
+        const types = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/mp4',
+            '' // Default fallback
+        ];
+        if (typeof MediaRecorder === 'undefined') return '';
+        return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+    };
+
     const startRecording = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            const mediaRecorder = new MediaRecorder(stream, {
-                mimeType: 'audio/webm;codecs=opus' // Web standard
-            });
+            const mimeType = getMimeType();
+            const options = mimeType ? { mimeType } : undefined;
+
+            const mediaRecorder = new MediaRecorder(stream, options);
 
             mediaRecorderRef.current = mediaRecorder;
             chunksRef.current = []; // Reset chunks
@@ -51,15 +64,23 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }
 
         return new Promise((resolve) => {
-            mediaRecorderRef.current!.onstop = () => {
-                const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+            const mediaRecorder = mediaRecorderRef.current!;
+
+            mediaRecorder.onstop = () => {
+                let mimeType = mediaRecorder.mimeType || 'audio/webm';
+                if (!mimeType || mimeType === '') mimeType = 'audio/mp4';
+
+                // Mobile Safari workaround: sometimes gives empty mimeType but works with mp4 container logic or plain blob
+                // We'll trust the captured chunks.
+                const audioBlob = new Blob(chunksRef.current, { type: mimeType });
+
                 // Stop all tracks to release microphone
-                mediaRecorderRef.current?.stream.getTracks().forEach(track => track.stop());
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
                 setIsRecording(false);
                 resolve(audioBlob);
             };
 
-            mediaRecorderRef.current!.stop();
+            mediaRecorder.stop();
         });
     }, []);
 
