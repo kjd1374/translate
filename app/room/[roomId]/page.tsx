@@ -19,38 +19,28 @@ export default function RoomPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [myLanguage, setMyLanguage] = useState<Language>('ko');
-    const [logs, setLogs] = useState<string[]>([]); // Debug Logs
-
-    const addLog = (msg: string) => {
-        setLogs(prev => [msg, ...prev].slice(0, 10)); // Keep last 10 logs
-    };
 
     // Hooks
-    const { isRecording, startRecording, stopRecording, permissionError, volume } = useAudioRecorder(addLog);
+    const { isRecording, startRecording, stopRecording, permissionError, volume } = useAudioRecorder();
 
     // Audio Ref
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     const toggleRecording = async () => {
         if (isRecording) {
-            addLog("User clicked STOP");
             await handleStopRecording();
         } else {
-            addLog("User clicked START");
             await startRecording();
         }
     };
 
     const handleStopRecording = async () => {
         setIsProcessing(true);
-        addLog("Processing stop...");
         const audioBlob = await stopRecording();
 
         if (audioBlob) {
-            addLog(`Audio captured. Size: ${audioBlob.size}`);
             await processAudio(audioBlob);
         } else {
-            addLog("No audio blob returned.");
             setIsProcessing(false);
         }
     };
@@ -151,14 +141,6 @@ export default function RoomPage() {
                         {permissionError}
                     </div>
                 )}
-
-                {/* Debug Console */}
-                <div className="bg-black/80 text-green-400 text-xs p-2 rounded font-mono h-24 overflow-y-auto mb-2 pointer-events-none opacity-80 z-50">
-                    {logs.map((log, i) => (
-                        <div key={i}>{log}</div>
-                    ))}
-                    {logs.length === 0 && <div>Debug logs will appear here...</div>}
-                </div>
 
                 {/* Language Handover */}
                 <Card className="p-1 flex rounded-full bg-slate-200 border-none shrink-0">
