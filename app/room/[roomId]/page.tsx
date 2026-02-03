@@ -26,7 +26,7 @@ export default function RoomPage() {
     };
 
     // Hooks
-    const { isRecording, startRecording, stopRecording, permissionError } = useAudioRecorder(addLog);
+    const { isRecording, startRecording, stopRecording, permissionError, volume } = useAudioRecorder(addLog);
 
     // Audio Ref
     const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -193,6 +193,7 @@ export default function RoomPage() {
                         isProcessing={isProcessing}
                         onClick={toggleRecording}
                         disabled={!!permissionError}
+                        volume={volume}
                     />
                 </div>
             </main>
