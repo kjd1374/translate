@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -25,6 +25,53 @@ export default function RoomPage() {
 
     // Audio Ref
     const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Pusher Subscription
+    useEffect(() => {
+        const initPusher = async () => {
+            // Dynamically import to avoid server-side issues (though 'use client' handles most)
+            const { pusherClient } = await import('@/lib/pusher');
+
+            const channel = pusherClient.subscribe(`room-${roomId}`);
+
+            channel.bind('translated-message', (data: any) => {
+                console.log("Pusher Event:", data);
+
+                // Add to transcript
+                const newMessage: Message = {
+                    id: data.id,
+                    role: 'user',
+                    originalText: data.originalText,
+                    translatedText: data.translatedText,
+                    timestamp: data.timestamp,
+                    language: data.sourceLang as Language,
+                };
+
+                setMessages(prev => {
+                    // Avoid duplicates if we optimistically added our own (though we aren't optimistically adding yet)
+                    if (prev.some(m => m.id === newMessage.id)) return prev;
+                    return [...prev, newMessage];
+                });
+
+                // AUTO-PLAY LOGIC:
+                // I speak Korean (myLanguage='ko'), Message is from VN (source='vi') -> Play KR (target='ko')
+                // I speak VN (myLanguage='vi'), Message is from KR (source='ko') -> Play VN (target='vi')
+
+                // If the message source is DIFFERENT from my language, it means it's an incoming message for me to hear.
+                if (data.sourceLang !== myLanguage) {
+                    speakText(data.translatedText, myLanguage);
+                }
+            });
+
+            return () => {
+                pusherClient.unsubscribe(`room-${roomId}`);
+            };
+        };
+
+        if (roomId) {
+            initPusher();
+        }
+    }, [roomId, myLanguage]);
 
     const toggleRecording = async () => {
         if (isRecording) {
@@ -51,6 +98,7 @@ export default function RoomPage() {
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('sourceLang', myLanguage);
             formData.append('targetLang', myLanguage === 'ko' ? 'vi' : 'ko');
+            formData.append('roomId', roomId); // Pass roomId for Pusher
 
             const response = await fetch('/api/translate', {
                 method: 'POST',
@@ -63,20 +111,9 @@ export default function RoomPage() {
                 throw new Error(data.error || 'Translation failed');
             }
 
-            const newMessage: Message = {
-                id: Date.now().toString(),
-                role: 'user', // In this MVP, I am always the user
-                originalText: data.originalText,
-                translatedText: data.translatedText,
-                timestamp: Date.now(),
-                language: myLanguage,
-                // audioUrl is optional/undefined now
-            };
-
-            setMessages(prev => [...prev, newMessage]);
-
-            // Auto play audio (Browser TTS)
-            speakText(data.translatedText, myLanguage === 'ko' ? 'vi' : 'ko');
+            // Note: We do NOT add the message to state here manually.
+            // We wait for the Pusher event to come back to ensure synchronization.
+            // (Round trip latency is strictly better for consistency in this MVP)
 
         } catch (error: any) {
             console.error("Processing error:", error);
