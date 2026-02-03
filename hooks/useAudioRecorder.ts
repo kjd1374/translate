@@ -61,6 +61,11 @@ export function useAudioRecorder(log?: (msg: string) => void): UseAudioRecorderR
             source.connect(analyser);
             sourceRef.current = source;
 
+            // CRITICAL FOR IOS: Resume context if it's suspended (it usually is)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
             const updateVolume = () => {
@@ -73,8 +78,9 @@ export function useAudioRecorder(log?: (msg: string) => void): UseAudioRecorderR
                 }
                 const average = sum / dataArray.length;
 
-                // Scale to 0-100 roughly (255 is max but speech usually lower)
-                const vol = Math.min(100, Math.round((average / 128) * 100));
+                // Make it more sensitive: scale up a bit more dynamically
+                // typical average is 10-50 for speech
+                const vol = Math.min(100, Math.round((average / 60) * 100));
                 setVolume(vol);
 
                 if (audioContextRef.current?.state === 'running') {

@@ -47,7 +47,6 @@ export default function RoomPage() {
 
     const processAudio = async (audioBlob: Blob) => {
         try {
-            addLog("Sending to API...");
             const formData = new FormData();
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('sourceLang', myLanguage);
@@ -63,8 +62,6 @@ export default function RoomPage() {
             if (!response.ok) {
                 throw new Error(data.error || 'Translation failed');
             }
-
-            addLog("Translation received");
 
             const newMessage: Message = {
                 id: Date.now().toString(),
@@ -83,15 +80,13 @@ export default function RoomPage() {
 
         } catch (error: any) {
             console.error("Processing error:", error);
-            addLog("API Error: " + error.message);
-            alert("Failed to process audio. Check logs.");
+            alert("Translation failed. Please try again.");
         } finally {
             setIsProcessing(false);
         }
     };
 
     const speakText = (text: string, lang: Language) => {
-        addLog(`TTS speaking (${lang}): ${text}`);
         if (typeof window !== 'undefined' && window.speechSynthesis) {
             // Cancel current speech
             window.speechSynthesis.cancel();
@@ -100,8 +95,6 @@ export default function RoomPage() {
             // 'vi-VN' for Vietnamese, 'ko-KR' for Korean
             utterance.lang = lang === 'vi' ? 'vi-VN' : 'ko-KR';
             window.speechSynthesis.speak(utterance);
-        } else {
-            addLog("Browser does not support speech synthesis");
         }
     };
 
