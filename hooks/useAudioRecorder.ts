@@ -60,31 +60,47 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         if (!recorder) return null;
 
         return new Promise((resolve) => {
+            // Define cleanup function to run on stop or timeout
             const cleanup = () => {
-                // Stop all media tracks to release the microphone
+                if (recorder.state !== 'inactive') {
+                    try {
+                        recorder.stop();
+                    } catch (e) {
+                        // Ignore errors if already stopped
+                    }
+                }
+
                 if (recorder.stream) {
                     recorder.stream.getTracks().forEach(track => track.stop());
                 }
+
                 setIsRecording(false);
 
-                // Create the final blob
                 if (chunksRef.current.length === 0) {
                     console.warn("No audio chunks recorded");
                     resolve(null);
-                    return;
+                } else {
+                    const type = recorder.mimeType || 'audio/mp4';
+                    const audioBlob = new Blob(chunksRef.current, { type });
+                    resolve(audioBlob);
                 }
+            };
 
-                // Detect type or fallback to mp4 (safest for iOS)
-                const type = recorder.mimeType || 'audio/mp4';
-                const audioBlob = new Blob(chunksRef.current, { type });
-                resolve(audioBlob);
+            // iOS Safari Protection: If onstop doesn't fire within 1s, force cleanup
+            const timeoutId = setTimeout(() => {
+                // console.warn("Forcing stop due to timeout (iOS fallback)");
+                cleanup();
+            }, 1000);
+
+            recorder.onstop = () => {
+                clearTimeout(timeoutId);
+                cleanup();
             };
 
             if (recorder.state === 'inactive') {
+                clearTimeout(timeoutId);
                 cleanup();
             } else {
-                // Force stop and wait for onstop event
-                recorder.onstop = cleanup;
                 recorder.stop();
             }
         });
