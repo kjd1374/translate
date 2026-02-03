@@ -60,8 +60,26 @@ export async function POST(req: NextRequest) {
             parsed = JSON.parse(cleanedJson);
         } catch (e) {
             console.error("JSON Parse Error:", e);
-            // Fallback or better error handling
             return NextResponse.json({ error: "Failed to parse Gemini response" }, { status: 500 });
+        }
+
+        // Broadcast to Pusher
+        const roomId = formData.get('roomId') as string || 'default-room';
+
+        try {
+            const { pusherServer } = await import('@/lib/pusher');
+            await pusherServer.trigger(`room-${roomId}`, 'translated-message', {
+                id: Date.now().toString(),
+                role: 'user', // Identify who sent it? Actually we need to know who sent it to avoid echo, but simpler is just language check
+                originalText: parsed.originalText,
+                translatedText: parsed.translatedText,
+                timestamp: Date.now(),
+                sourceLang: sourceLang, // 'ko' or 'vi'
+                targetLang: targetLang,
+            });
+        } catch (pusherError) {
+            console.error("Pusher Error:", pusherError);
+            // Don't fail the request if pusher fails, just log it
         }
 
         return NextResponse.json({
