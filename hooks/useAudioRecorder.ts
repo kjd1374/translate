@@ -96,14 +96,37 @@ export function useAudioRecorder(log?: (msg: string) => void): UseAudioRecorderR
     const startRecording = useCallback(async () => {
         try {
             safeLog("Requesting microphone permission...");
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // OPTIMIZATION: Low bandwidth settings for faster upload
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 16000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                }
+            });
             safeLog("Microphone access granted. Stream ID: " + stream.id);
 
             // Start Visualizer
             startAnalysis(stream);
 
             // Native MediaRecorder
-            const mediaRecorder = new MediaRecorder(stream);
+            // Try to set lower bitrate for speed
+            const options: MediaRecorderOptions = {
+                audioBitsPerSecond: 32000,
+            };
+
+            // iOS might ignore bitsPerSecond or require specific mimeTypes. 
+            // We verify support or fallback to default which works.
+            let mediaRecorder: MediaRecorder;
+            try {
+                mediaRecorder = new MediaRecorder(stream, options);
+            } catch (e) {
+                // Fallback for iOS/Legacy if options fail
+                safeLog("Low bitrate options failed, falling back to default");
+                mediaRecorder = new MediaRecorder(stream);
+            }
+
             safeLog(`MediaRecorder created. MimeType: ${mediaRecorder.mimeType}`);
 
             mediaRecorderRef.current = mediaRecorder;
