@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
 
         // Initialize Gemini
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
         // Prompt construction
         const prompt = `
